@@ -4,16 +4,15 @@ import numpy as np
 import torch
 import torch.random
 from torch.optim import Adam
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 
 from dataloader import OpenCellLoader
-from celle import VQGanVAE, DALLE
+from celle import VQGanVAE, CELLE
 from omegaconf import OmegaConf
-import argparse, os, sys, datetime, glob, importlib
+import argparse, os, sys, datetime, glob
 
 
 from celle.celle import gumbel_sample, top_k
@@ -32,13 +31,12 @@ class CellDataModule(pl.LightningDataModule):
     def __init__(
         self,
         config_file,
-        sequence_mode="standard",
+        sequence_mode="simple",
         vocab="bert",
         crop_size=256,
         batch_size=1,
         threshold=False,
         text_seq_len=1000,
-        include_eos=True,
         num_workers=1,
         **kwargs,
     ):
@@ -53,7 +51,6 @@ class CellDataModule(pl.LightningDataModule):
         self.threshold = threshold
         self.text_seq_len = int(text_seq_len)
         self.vocab = vocab
-        self.include_eos = include_eos
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
 
     def setup(self):
@@ -67,7 +64,6 @@ class CellDataModule(pl.LightningDataModule):
             vocab=self.vocab,
             text_seq_len=self.text_seq_len,
             threshold=self.threshold,
-            include_eos=self.include_eos,
         )
 
         self.cell_dataset_val = OpenCellLoader(
@@ -79,7 +75,6 @@ class CellDataModule(pl.LightningDataModule):
             vocab=self.vocab,
             text_seq_len=self.text_seq_len,
             threshold=self.threshold,
-            include_eos=self.include_eos,
         )
 
     def prepare_data(self):
@@ -109,13 +104,13 @@ class CellDataModule(pl.LightningDataModule):
 class CELLE_trainer(pl.LightningModule):
     def __init__(
         self,
-        ckpt_path,
         vqgan_model_path,
         vqgan_config_path,
+        ckpt_path=None,
         image_key="target",
         condition_model_path=None,
         condition_config_path=None,
-        num_images=1,
+        num_images=2,
         dim=2,
         num_text_tokens=10000,
         text_seq_len=256,
@@ -153,7 +148,7 @@ class CELLE_trainer(pl.LightningModule):
         else:
             condition_vae = None
 
-        self.dalle = DALLE(
+        self.celle = CELLE(
             dim=dim,
             vae=vae,  # automatically infer (1) image sequence length and (2) number of image tokens
             condition_vae=condition_vae,
@@ -195,12 +190,12 @@ class CELLE_trainer(pl.LightningModule):
                 if k.startswith(ik):
                     self.print("Deleting key {} from state_dict.".format(k))
                     del sd[k]
-        self.dalle.load_state_dict(sd, strict=False)
+        self.celle.load_state_dict(sd, strict=False)
         print(f"Restored from {path}")
 
     def forward(self, text, condition, target, return_loss=True):
 
-        return self.dalle(
+        return self.celle(
             text=text, condition=condition, image=target, return_loss=return_loss
         )
 
@@ -214,12 +209,12 @@ class CELLE_trainer(pl.LightningModule):
     def get_image_from_logits(self, logits, temperature=0.9):
 
         filtered_logits = top_k(logits, thres=0.5)
-        sample = gumbel_sample(filtered_logits, temperature=0.9, dim=-1)
+        sample = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
 
-        self.dalle.vae.eval()
-        out = self.dalle.vae.decode(
-            sample[:, self.dalle.text_seq_len + self.dalle.condition_seq_len :]
-            - (self.dalle.num_text_tokens + self.dalle.num_condition_tokens)
+        self.celle.vae.eval()
+        out = self.celle.vae.decode(
+            sample[:, self.celle.text_seq_len + self.celle.condition_seq_len :]
+            - (self.celle.num_text_tokens + self.celle.num_condition_tokens)
         )
 
         return out
@@ -276,12 +271,9 @@ class CELLE_trainer(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         text, condition, target = self.get_input(batch)
-        loss, log_dict = self.get_loss(
-            text, condition, target
-        )
+        loss, log_dict = self.get_loss(text, condition, target)
 
-        loss = self.total_loss(loss, log_dict, mode="train"
-        )
+        loss = self.total_loss(loss, log_dict, mode="train")
 
         return loss
 
@@ -290,39 +282,16 @@ class CELLE_trainer(pl.LightningModule):
         with torch.no_grad():
 
             text, condition, target = self.get_input(batch)
-            (
-                loss,
-                log_dict,
-            ) = self.get_loss(text, condition, target)
+            loss, log_dict = self.get_loss(text, condition, target)
 
-            loss = self.total_loss(
-                loss, log_dict, mode="val"
-            )
+            loss = self.total_loss(loss, log_dict, mode="val")
 
         return loss
 
     def configure_optimizers(self):
 
-        if self.dalle.vae_requires_grad:
 
-            params = list(self.named_parameters())
-
-            grouped_parameters = [
-                {
-                    "params": [p for n, p in params if "vae" not in n],
-                    "lr": self.learning_rate,
-                },
-                {
-                    "params": [p for n, p in params if "vae" in n],
-                    "lr": self.vae_learning_rate,
-                },
-            ]
-
-            optimizer = Adam(grouped_parameters, lr=self.learning_rate)
-
-        else:
-
-            optimizer = Adam(self.parameters(), lr=self.learning_rate)
+        optimizer = Adam(self.parameters(), lr=self.learning_rate)
 
         return optimizer
 
@@ -346,7 +315,7 @@ class CELLE_trainer(pl.LightningModule):
         text = text.squeeze(1).to(self.device)
         condition = condition.to(self.device)
 
-        out = self.dalle.generate_images(text=text, condition=condition)
+        out = self.celle.generate_images(text=text, condition=condition, use_cache=True)
 
         log["condition"] = self.scale_image(condition)
         log["output"] = self.scale_image(out)
@@ -359,7 +328,7 @@ class CELLE_trainer(pl.LightningModule):
         return log
 
 
-# from https://github.com/CompVis/taming-transformers/blob/master/dalle_main.py
+# from https://github.com/CompVis/taming-transformers/blob/master/celle_main.py
 
 if __name__ == "__main__":
     # custom parser to specify config files, train, test and debug mode,
@@ -374,7 +343,7 @@ if __name__ == "__main__":
     #   params:
     #       key: value
     # data:
-    #   target: dalle_main.DataModuleFromConfig
+    #   target: celle_main.DataModuleFromConfig
     #   params:
     #      batch_size: int
     #      wrap: bool
@@ -406,8 +375,8 @@ if __name__ == "__main__":
     now = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
     # add cwd for convenience and to make classes in this file available when
-    # running as `python dalle_main.py`
-    # (in particular `dalle_main.DataModuleFromConfig`)
+    # running as `python celle_main.py`
+    # (in particular `celle_main.DataModuleFromConfig`)
     sys.path.append(os.getcwd())
 
     parser = get_parser()
@@ -533,7 +502,7 @@ if __name__ == "__main__":
         # add callback which sets up log directory
         default_callbacks_cfg = {
             "setup_callback": {
-                "target": "CELLE_taming_main.SetupCallback",
+                "target": "celle_taming_main.SetupCallback",
                 "params": {
                     "resume": opt.resume,
                     "now": now,
@@ -544,22 +513,22 @@ if __name__ == "__main__":
                     "lightning_config": lightning_config,
                 },
             },
-            # "image_logger": {
-            #     "target": "CELLE_taming_main.ImageLogger",
-            #     "params": {
-            #         "batch_frequency": 0,
-            #         "max_images": 0,
-            #         "clamp": False,
-            #         "increase_log_steps": False,
-            #     },
-            # },
-            "learning_rate_logger": {
-                "target": "CELLE_taming_main.LearningRateMonitor",
+            "image_logger": {
+                "target": "celle_taming_main.ImageLogger",
                 "params": {
-                    "logging_interval": "step",
-                    # "log_momentum": True
+                    "batch_frequency": 1500,
+                    "max_images": 5,
+                    "clamp": False,
+                    "increase_log_steps": False,
                 },
             },
+            # "learning_rate_logger": {
+            #     "target": "celle_taming_main.LearningRateMonitor",
+            #     "params": {
+            #         "logging_interval": "step",
+            #         # "log_momentum": True
+                # },
+            # },
         }
         callbacks_cfg = lightning_config.callbacks or OmegaConf.create()
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
@@ -580,9 +549,6 @@ if __name__ == "__main__":
         # configure learning rate
         bs, lr = config.data.params.batch_size, config.model.learning_rate
 
-        if "vae_learning_rate" in config.model:
-            vae_lr = config.model.vae_learning_rate
-
         if not cpu:
             ngpu = len(lightning_config.trainer.gpus.strip(",").split(","))
         else:
@@ -591,9 +557,6 @@ if __name__ == "__main__":
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
         model.learning_rate = accumulate_grad_batches * ngpu * bs * lr
-
-        if "vae_learning_rate" in config.model:
-            model.vae_learning_rate = accumulate_grad_batches * ngpu * bs * vae_lr
 
         print(
             "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (lr)".format(

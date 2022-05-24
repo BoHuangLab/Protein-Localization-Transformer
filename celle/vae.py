@@ -64,7 +64,7 @@ def instantiate_from_config(config):
 
 
 class VQGanVAE(nn.Module):
-    def __init__(self, vqgan_model_path=None, vqgan_config_path=None):
+    def __init__(self, vqgan_model_path=None, vqgan_config_path=None, channels = 1):
         super().__init__()
 
         assert(vqgan_model_path is not None)
@@ -89,11 +89,10 @@ class VQGanVAE(nn.Module):
             / config.model.params.ddconfig.attn_resolutions[0]
         )
         self.num_layers = int(log(f) / log(2))
-        self.image_size = 256
+        self.image_size = config.model.params.ddconfig.resolution
         self.num_tokens = config.model.params.n_embed
         self.is_gumbel = isinstance(self.model, GumbelVQ)
-
-        self._register_external_parameters()
+        self.channels = config.model.params.ddconfig.in_channels
 
     def get_codebook_indices(self, img):
         b = img.shape[0]

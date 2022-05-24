@@ -94,11 +94,10 @@ class OpenCellLoader(Dataset):
         split_key=None,
         crop_size=600,
         crop_method="random",
-        sequence_mode="standard",
+        sequence_mode="simple",
         vocab="bert",
         threshold=False,
         text_seq_len=0,
-        include_eos=True,
     ):
         self.config_file = config_file
         self.image_folders = []
@@ -108,7 +107,6 @@ class OpenCellLoader(Dataset):
         self.threshold = threshold
         self.text_seq_len = int(text_seq_len)
         self.vocab = vocab
-        self.include_eos = include_eos
 
         if self.sequence_mode == "embedding" or self.sequence_mode == "onehot":
 
@@ -273,14 +271,11 @@ class OpenCellLoader(Dataset):
                     [self.tokenizer.encode(protein_sequence)]
                 )[:, 1:]
 
-            if not self.include_eos:
-                protein_vector = protein_vector[:, :-1]
-            else:
 
-                if prot_len > self.text_seq_len:
-                    protein_vector = protein_vector[:, :-1]
-                elif prot_len == self.text_seq_len:
-                    protein_vector = protein_vector[:, :-2]
+            if prot_len > self.text_seq_len:
+                protein_vector = protein_vector[:, :-1]
+            elif prot_len == self.text_seq_len:
+                protein_vector = protein_vector[:, :-2]
 
             if protein_vector.shape[-1] < self.text_seq_len:
                 diff = self.text_seq_len - protein_vector.shape[-1]
@@ -288,12 +283,16 @@ class OpenCellLoader(Dataset):
                     protein_vector, (0, diff), "constant", pad_token
                 )
 
-            return protein_vector
-
+            return protein_vector.long()
+        
+        else:
+            
+            assert("No valid sequence mode selected")
+        
         if protein_vector.shape[-1] + 1 < self.text_seq_len:
             diff = self.text_seq_len - protein_vector.shape[-1]
             protein_vector = torch.nn.functional.pad(
                 protein_vector, (0, diff), "constant", 0
             )
 
-        return protein_vector
+        return protein_vector.long()

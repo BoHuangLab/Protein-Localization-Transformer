@@ -6,6 +6,7 @@ import torch
 import torchvision
 from torch.utils.data import DataLoader, Dataset
 from dataloader import OpenCellLoader
+from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
@@ -553,7 +554,7 @@ if __name__ == "__main__":
         # add callback which sets up log directory
         default_callbacks_cfg = {
             "setup_callback": {
-                "target": "CELLE_taming_main.SetupCallback",
+                "target": "celle_taming_main.SetupCallback",
                 "params": {
                     "resume": opt.resume,
                     "now": now,
@@ -565,7 +566,7 @@ if __name__ == "__main__":
                 },
             },
             "image_logger": {
-                "target": "CELLE_taming_main.ImageLogger",
+                "target": "celle_taming_main.ImageLogger",
                 "params": {
                     "batch_frequency": 659,
                     "max_images": 10,
@@ -574,7 +575,7 @@ if __name__ == "__main__":
                 },
             },
             "learning_rate_logger": {
-                "target": "main.LearningRateMonitor",
+                "target": "celle_taming_main.LearningRateMonitor",
                 "params": {
                     "logging_interval": "step",
                     # "log_momentum": True

@@ -6,7 +6,7 @@ import numpy as np
 from axial_positional_embedding import AxialPositionalEmbedding
 from einops import rearrange
 
-from celle.vae import OpenAIDiscreteVAE, VQGanVAE
+from celle.vae import VQGanVAE
 from celle.transformer import Transformer, DivideMax
 import csv
 
@@ -116,6 +116,25 @@ def typical(
 
     return scores
 
+class SharedEmbedding(nn.Embedding):
+    def __init__(self, linear, start_index, end_index, **kwargs):
+        super().__init__(end_index - start_index, linear.weight.shape[1], **kwargs)
+        del self.weight
+
+        self.linear = linear
+        self.start_index = start_index
+        self.end_index = end_index
+
+    def forward(self, input):
+        return F.embedding(
+            input,
+            self.linear.weight[self.start_index : self.end_index],
+            self.padding_idx,
+            self.max_norm,
+            self.norm_type,
+            self.scale_grad_by_freq,
+            self.sparse,
+        )
 
 class ModelExtender(nn.Module):
     def __init__(self, vocab, out_features, fixed_embedding=False):
@@ -409,7 +428,6 @@ class CELLE(nn.Module):
         reversible=False,
         attn_dropout=0.0,
         ff_dropout=0,
-        sparse_attn=False,
         attn_types=None,
         loss_cond_weight=1,
         loss_img_weight=7,
@@ -419,6 +437,10 @@ class CELLE(nn.Module):
         rotary_emb=True,
         text_embedding=None,
         fixed_embedding=False,
+        shared_attn_ids=None,
+        shared_ff_ids=None,
+        share_input_output_emb=False,
+        optimize_for_inference=True,
     ):
         super().__init__()
         assert isinstance(
@@ -427,36 +449,6 @@ class CELLE(nn.Module):
 
         self.text_embedding = text_embedding
         self.fixed_embedding = fixed_embedding
-
-        if text_embedding is None:
-            self.bos_token = num_text_tokens
-            num_text_tokens += 1
-            self.text_emb = nn.Embedding(num_text_tokens, dim)
-            # num_text_tokens = num_text_tokens + text_seq_len
-
-        elif text_embedding == "unirep":
-            self.bos_token = 24
-            self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
-
-        elif text_embedding == "bert":
-            self.bos_token = 2
-            self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
-
-        elif text_embedding == "esm1b":
-            self.bos_token = 0
-            self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
-
-        elif text_embedding == "onehot":
-            self.bos_token = 24
-            self.text_emb = OneHotEmbedding(num_classes=num_text_tokens)
-
-        elif text_embedding == "aadescriptors":
-            self.bos_token = 21
-            self.text_emb = aaDescriptors(path="data/aaDescriptors.csv")
-
-        self.text_pos_emb = (
-            nn.Embedding(text_seq_len + 1, dim) if not rotary_emb else always(0)
-        )  # +1 for <bos>
 
         self.num_text_tokens = num_text_tokens  # for offsetting logits index and calculating cross entropy loss
         self.text_seq_len = text_seq_len
@@ -467,7 +459,9 @@ class CELLE(nn.Module):
         image_fmap_size = vae.image_size // (2 ** vae.num_layers)
         image_seq_len = image_fmap_size ** 2
 
-        self.image_emb = nn.Embedding(num_image_tokens, dim)
+        self.text_pos_emb = (
+            nn.Embedding(text_seq_len + 1, dim) if not rotary_emb else always(0)
+        )  # +1 for <bos>
 
         self.image_pos_emb = (
             AxialPositionalEmbedding(
@@ -511,12 +505,8 @@ class CELLE(nn.Module):
         total_tokens = num_text_tokens + num_image_tokens + num_condition_tokens
         self.total_tokens = total_tokens
         self.total_seq_len = seq_len
-        self.vae = vae
-        self.condition_vae = condition_vae
-
-        set_requires_grad(
-            self.vae, self.vae_requires_grad
-        )  # freeze VAE from being trained
+        self.vae = vae.eval()
+        self.condition_vae = condition_vae.eval()
 
         self.transformer = Transformer(
             dim=dim,
@@ -531,11 +521,13 @@ class CELLE(nn.Module):
             attn_types=attn_types,
             image_fmap_size=image_fmap_size + condition_fmap_size,
             num_images=num_images,
-            sparse_attn=sparse_attn,
             stable=stable,
             sandwich_norm=sandwich_norm,
             shift_tokens=shift_tokens,
             rotary_emb=rotary_emb,
+            shared_attn_ids=shared_attn_ids,
+            shared_ff_ids=shared_ff_ids,
+            optimize_for_inference=optimize_for_inference,
         )
 
         self.stable = stable
@@ -547,6 +539,42 @@ class CELLE(nn.Module):
             nn.LayerNorm(dim),
             nn.Linear(dim, self.total_tokens),
         )
+
+        if share_input_output_emb:
+            self.text_emb = SharedEmbedding(self.to_logits[1], 0, num_text_tokens)
+            self.image_emb = SharedEmbedding(
+                self.to_logits[1], num_text_tokens, total_tokens
+            )
+        else:
+            if text_embedding is None:
+                self.bos_token = num_text_tokens - 1
+                self.text_emb = nn.Embedding(num_text_tokens, dim)
+
+            elif text_embedding == "no_text":
+                self.bos_token = num_text_tokens - 1
+                self.text_emb = nn.Embedding(num_text_tokens, dim)
+
+            elif text_embedding == "unirep":
+                self.bos_token = 24
+                self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
+
+            elif text_embedding == "bert":
+                self.bos_token = 2
+                self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
+
+            elif text_embedding == "esm1b":
+                self.bos_token = 0
+                self.text_emb = ModelExtender(text_embedding, dim, fixed_embedding)
+
+            elif text_embedding == "onehot":
+                self.bos_token = 24
+                self.text_emb = OneHotEmbedding(num_classes=num_text_tokens)
+
+            elif text_embedding == "aadescriptors":
+                self.bos_token = 21
+                self.text_emb = aaDescriptors(path="data/aaDescriptors.csv")
+
+            self.image_emb = nn.Embedding(num_image_tokens, dim)
 
         seq_range = torch.arange(seq_len)
         logits_range = torch.arange(total_tokens)
@@ -591,6 +619,8 @@ class CELLE(nn.Module):
         return_logits=False,
         filter_method="top_k",
         progress=False,
+        cond_scale=1,
+        use_cache=False,
     ):
         (
             vae,
@@ -610,6 +640,8 @@ class CELLE(nn.Module):
             self.num_text_tokens,
         )
         vae = vae.eval()
+        condition_vae = condition_vae.eval()
+        
         if progress == True:
             progress = tqdm
         else:
@@ -620,13 +652,13 @@ class CELLE(nn.Module):
         text = text[:, :text_seq_len]  # make sure text is within bounds
         out = text
 
-        if exists(condition):
+        if exists(condition) and not is_empty(condition) and exists(self.condition_vae):
             with torch.no_grad():
                 indices = condition_vae.get_codebook_indices(condition)
             indices = indices[:, :num_condition_tokens]
             out = torch.cat((out, indices), dim=-1)
 
-        if exists(img):
+        if exists(img) and not is_empty(img) and exists(self.vae):
             with torch.no_grad():
                 indices = vae.get_codebook_indices(img)
             num_img_tokens = default(
@@ -635,6 +667,11 @@ class CELLE(nn.Module):
             # assert num_img_tokens < image_seq_len, 'number of initial image tokens for priming must be less than the total image token sequence length'
             indices = indices[:, :num_img_tokens]
             out = torch.cat((out, indices), dim=-1)
+
+        prev_cache = None
+        cache = {} if use_cache else None
+
+        full_logits = []
 
         for cur_len in progress(range(out.shape[1], total_len)):
 
@@ -648,15 +685,33 @@ class CELLE(nn.Module):
                 out[:, text_seq_len + condition_seq_len :],
             )
 
-            logits = self(text=text, condition=condition, image=image)
-            full_logits = logits
+            if cond_scale != 1 and use_cache:
+                # copy the cache state to infer from the same place twice
+                prev_cache = cache.copy()
 
+            logits = self(text=text, condition=condition, image=image, cache=cache)
+
+            if cond_scale != 1:
+                # discovery by Katherine Crowson
+                # https://twitter.com/RiversHaveWings/status/1478093658716966912
+                null_cond_logits = self(
+                    text, image, null_cond_prob=1.0, cache=prev_cache
+                )
+                logits = null_cond_logits + (logits - null_cond_logits) * cond_scale
+
+            if use_cache:
+                if len(full_logits) == 0:
+                    full_logits = logits
+                else:
+                    full_logits = torch.cat([full_logits, logits], dim=1)
+            else:
+                full_logits = logits
             logits = logits[:, -1, :]
 
             if filter_method == "top_k":
                 filtered_logits = top_k(logits, thres=filter_thres)
             elif filter_method == "typical":
-                filtered_logits = typical(logits, min_tokens_to_keep=2)
+                filtered_logits = typical(logits, min_tokens_to_keep=20)
             sample = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
             sample -= (
                 (num_text_tokens) if is_image else 0
@@ -674,20 +729,33 @@ class CELLE(nn.Module):
         images = vae.decode(img_seq)
         if return_logits:
             return images, full_logits
-        if exists(clip):
-            scores = clip(text_seq, images, return_loss=False)
-            return images, scores
 
         return images
 
     def forward(
-        self, text, condition=None, image=None, return_loss=False, return_encoding=False
+        self,
+        text,
+        condition=None,
+        image=None,
+        return_loss=False,
+        return_encoding=False,
+        null_cond_prob=0,
+        cache=None,
     ):
 
         assert (
             text.shape[-1] == self.text_seq_len
         ), f"the length {text.shape[-1]} of the text tokens you passed in does not have the correct length ({self.text_seq_len})"
         device, total_seq_len = text.device, self.total_seq_len
+
+
+        batch, device, total_seq_len = text.shape[0], text.device, self.total_seq_len
+
+        # randomly remove text condition with <null_cond_prob> probability
+
+        if null_cond_prob > 0:
+            null_mask = prob_mask_like((batch,), null_cond_prob, device=device)
+            text *= rearrange(~null_mask, "b -> b 1")
 
         self.image = image
         self.condition = condition
@@ -721,8 +789,8 @@ class CELLE(nn.Module):
 
             if is_raw_image:
                 image_size = self.vae.image_size
-                # assert tuple(image.shape[1:]) == (self.vae.channels, image_size, image_size), f'invalid image of dimensions {image.shape} passed in during training'
-                if self.vae_requires_grad:
+                assert tuple(image.shape[1:]) == (self.vae.channels, image_size, image_size), f'invalid image of dimensions {image.shape} passed in during training'
+                with torch.no_grad():
                     image = self.vae.get_codebook_indices(image)
 
             image_emb = self.image_emb(image)
@@ -742,7 +810,10 @@ class CELLE(nn.Module):
             alpha = 0.1
             tokens = tokens * alpha + tokens.detach() * (1 - alpha)
 
-        out = self.transformer(tokens)
+        if exists(cache) and cache.get("offset"):
+            tokens = tokens[:, -1:]
+
+        out = self.transformer(tokens, cache=cache)
 
         if self.stable:
             out = self.norm_by_max(out)
@@ -755,8 +826,14 @@ class CELLE(nn.Module):
         # mask logits to make sure text predicts text (except last token), and image predicts image
         logits_mask = self.logits_mask[:, :seq_len]
 
+        if exists(cache) and cache.get("offset"):
+            logits_mask = logits_mask[:, -1:]
+
         max_neg_value = -torch.finfo(logits.dtype).max
         logits.masked_fill_(logits_mask, max_neg_value)
+
+        if exists(cache):
+            cache["offset"] = cache.get("offset", 0) + logits.shape[1]
 
         if not return_loss:
             return logits
@@ -775,15 +852,9 @@ class CELLE(nn.Module):
 
         logits_re = rearrange(logits, "b n c -> b c n")
 
-        if self.text_seq_len > 1:
-
-            loss_text = F.cross_entropy(
-                logits_re[:, :, : self.text_seq_len], labels[:, : self.text_seq_len]
-            )
-
-        else:
-            loss_text = 0
-
+        loss_text = F.cross_entropy(
+            logits_re[:, :, : self.text_seq_len], labels[:, : self.text_seq_len]
+        )
         loss_cond = F.cross_entropy(
             logits_re[
                 :,
@@ -798,21 +869,16 @@ class CELLE(nn.Module):
             labels[:, self.text_seq_len + self.condition_seq_len :],
         )
 
-        loss_vae_cond = self.vae(self.image, 1)
-        loss_vae_img = self.vae(self.condition, 1)
-
         loss_dict = {
             "loss_text": loss_text,
             "loss_cond": loss_cond,
             "loss_img": loss_img,
-            "loss_vae_cond": loss_vae_cond,
-            "loss_vae_img": loss_vae_img,
         }
 
         loss = (
             loss_text
-            + self.loss_cond_weight * (loss_cond + loss_vae_cond * 10)
-            + self.loss_img_weight * (loss_img + loss_vae_img * 10)
+            + self.loss_cond_weight * (loss_cond)
+            + self.loss_img_weight * (loss_img)
         ) / (self.loss_img_weight + self.loss_cond_weight + 1)
 
         return loss, loss_dict, logits

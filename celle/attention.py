@@ -1,5 +1,4 @@
 from inspect import isfunction
-from math import ceil
 
 import torch
 from torch import nn, einsum
@@ -46,7 +45,15 @@ def apply_pos_emb(pos_emb, qkv):
 
 class Attention(nn.Module):
     def __init__(
-        self, dim, seq_len, causal=True, heads=8, dim_head=64, dropout=0.0, stable=False
+        self,
+        dim,
+        seq_len,
+        causal=True,
+        heads=8,
+        dim_head=64,
+        dropout=0.0,
+        stable=False,
+        static_mask=None,
     ):
         super().__init__()
         inner_dim = dim_head * heads
@@ -56,23 +63,33 @@ class Attention(nn.Module):
 
         self.stable = stable
         self.causal = causal
+        self.register_buffer("static_mask", static_mask, persistent=False)
 
         self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
         self.to_out = nn.Sequential(nn.Linear(inner_dim, dim), nn.Dropout(dropout))
 
         self.save_attn = nn.Identity()
 
-    def forward(self, x, mask=None, rotary_pos_emb=None):
+    def forward(self, x, mask=None, rotary_pos_emb=None, cache=None, cache_key=None):
         b, n, _, h, device = *x.shape, self.heads, x.device
         softmax = torch.softmax if not self.stable else stable_softmax
+
+        offset = cache.get("offset", 0) if exists(cache) else 0
 
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=h), qkv)
 
         if exists(rotary_pos_emb):
-            q, k, v = apply_pos_emb(rotary_pos_emb, (q, k, v))
+            q, k, v = apply_pos_emb(rotary_pos_emb[..., offset:, :], (q, k, v))
 
         q = q * self.scale
+
+        if offset > 0:
+            k_top, v_top = cache[cache_key]
+            k = torch.cat([k_top, k], dim=-2)
+            v = torch.cat([v_top, v], dim=-2)
+        if exists(cache):
+            cache[cache_key] = k, v
 
         dots = torch.einsum("b h i d, b h j d -> b h i j", q, k)
         mask_value = max_neg_value(dots)
@@ -82,14 +99,21 @@ class Attention(nn.Module):
             dots.masked_fill_(~mask, mask_value)
             del mask
 
-        if self.causal == True:
+        if (
+            self.causal and offset == 0
+        ):  # causality is naturally enforced for the cached inference
             i, j = dots.shape[-2:]
             mask = torch.ones(i, j, device=device).triu_(j - i + 1).bool()
             dots.masked_fill_(mask, mask_value)
 
+        if exists(self.static_mask):
+            dots.masked_fill_(
+                ~self.static_mask[offset : offset + n, : offset + n], mask_value
+            )
+
         attn = softmax(dots, dim=-1)
 
-        self.save_attn({"attn": attn, "v": v})
+        self.save_attn(attn)
 
         out = torch.einsum("b h i j, b h j d -> b h i d", attn, v)
         out = rearrange(out, "b h n d -> b n (h d)")
@@ -395,4 +419,3 @@ class SparseAxialCausalAttention(nn.Module):
         out = rearrange(out, "(b h) n d -> b n (h d)", h=h)
         out = self.to_out(out)
         return out[:, :n]
-

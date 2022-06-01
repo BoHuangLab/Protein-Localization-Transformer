@@ -90,7 +90,7 @@ class OpenCellLoader(Dataset):
 
     def __init__(
         self,
-        config_file,
+        data_csv,
         split_key=None,
         crop_size=600,
         crop_method="random",
@@ -99,7 +99,7 @@ class OpenCellLoader(Dataset):
         threshold=False,
         text_seq_len=0,
     ):
-        self.config_file = config_file
+        self.data_csv = data_csv
         self.image_folders = []
         self.crop_method = crop_method
         self.crop_size = crop_size
@@ -125,9 +125,9 @@ class OpenCellLoader(Dataset):
                     "ESM-1b"
                 ).get_batch_converter()
 
-        data = pd.read_csv(config_file)
+        data = pd.read_csv(data_csv)
 
-        self.parent_path = os.path.dirname(config_file).split(config_file)[0]
+        self.parent_path = os.path.dirname(data_csv).split(data_csv)[0]
 
         if split_key == "train":
             self.data = data[data["split"] == "train"]

@@ -1,0 +1,36 @@
+model:
+  learning_rate: 0.0003
+  target: celle_main.CELLE_trainer
+  params:
+    ckpt_path:
+    condition_model_path:
+    condition_config_path:
+    vqgan_model_path:
+    vqgan_config_path:
+    image_key: threshold
+    num_images: 2
+    dim: 768
+    num_text_tokens: 30
+    text_seq_len: 1000
+    depth: 31
+    heads: 16
+    dim_head: 64
+    attn_dropout: 0.1
+    ff_dropout: 0.1
+    attn_types: full
+    rotary_emb: true
+    fixed_embedding: True
+    monitor: val/loss_img_epoch
+    text_embedding: bert
+
+data:
+  target: celle_main.CellDataModule
+  params:
+    data_csv: 
+    crop_size: 256
+    batch_size: 1
+    sequence_mode: embedding
+    vocab: bert
+    threshold: true
+    text_seq_len: 1000
+    num_workers: 4

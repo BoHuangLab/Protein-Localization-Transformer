@@ -30,7 +30,7 @@ from celle_taming_main import (
 class CellDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        config_file,
+        data_csv,
         sequence_mode="simple",
         vocab="bert",
         crop_size=256,
@@ -42,7 +42,7 @@ class CellDataModule(pl.LightningDataModule):
     ):
         super().__init__()
 
-        self.config_file = config_file
+        self.data_csv = data_csv
         self.protein_sequence_length = 0
         self.image_folders = []
         self.crop_size = crop_size
@@ -56,7 +56,7 @@ class CellDataModule(pl.LightningDataModule):
     def setup(self):
         # called on every GPU
         self.cell_dataset_train = OpenCellLoader(
-            config_file=self.config_file,
+            data_csv=self.data_csv,
             crop_size=self.crop_size,
             split_key="train",
             crop_method="random",
@@ -67,7 +67,7 @@ class CellDataModule(pl.LightningDataModule):
         )
 
         self.cell_dataset_val = OpenCellLoader(
-            config_file=self.config_file,
+            data_csv=self.data_csv,
             crop_size=self.crop_size,
             crop_method="center",
             split_key="val",

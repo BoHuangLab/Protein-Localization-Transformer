@@ -31,11 +31,11 @@ Next, install ```torch = 1.7.1``` and ```torchvision==0.8.2``` with the [appropr
 
 ### Images
 
-We used OpenCell for CELL-E, which has [information on downloading the entire dataset](https://opencell.czbiohub.org/download). A ```config_file``` is needed to for the dataloader. You must generate a csv file which contains the columns ```nucleus_image_path```, ```protein_image_path```, ```metadata_path```, and ```split``` (train or val).
+We used OpenCell for CELL-E, which has [information on downloading the entire dataset](https://opencell.czbiohub.org/download). A ```data_csv``` is needed to for the dataloader. You must generate a csv file which contains the columns ```nucleus_image_path```, ```protein_image_path```, ```metadata_path```, and ```split``` (train or val). It is assumed that this file exists within the the same general ```data``` folder as the images and metadata files.
 
 ### Metadata
 
-Metadata is a JSON which should accompany every protein sequence. If a sequence does not appear in the ```config_file```, it must appear in ```metadata.json``` under a column named ```protein_sequence```.
+Metadata is a JSON which should accompany every protein sequence. If a sequence does not appear in the ```data_csv```, it must appear in ```metadata.json``` with the a key named ```protein_sequence```.
 
 Adding more information here can be useful for querying individual proteins. They can be retrieved via ```retrieve_metadata```, which creates a ```self.metadata``` variable within the dataset object.
 

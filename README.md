@@ -129,6 +129,7 @@ CELL-E contains the following options from [dalle-pytorch](https://github.com/lu
 To generate images, set the saved model as the ckpt_path. This method can be unstable, so refer to ```Demo.ipynb``` to see another way of loading.
 
 ```python
+import OmegaConf
 from celle_main import instantiate_from_config
 
 configs = OmegaConf.load(configs/celle.yaml);

@@ -6,7 +6,7 @@
 
 # CELL-E: Biological Zero-Shot Text-to-Image Synthesis for Protein Localization Prediction
 
-This repository is the official implementation of [CELL-E: Biological Zero-Shot Text-to-Image Synthesis for Protein Localization Prediction](). 
+This repository is the official implementation of [CELL-E: Biological Zero-Shot Text-to-Image Synthesis for Protein Localization Prediction](https://www.biorxiv.org/content/10.1101/2022.05.27.493774v1). 
 
 ![schematic](images/preview.png)
 
@@ -152,7 +152,8 @@ Pre-trained models will be available after publication.
 Please cite us if you decide to use our code for any part of your research.
 ```
 CELL-E: Biological Zero-Shot Text-to-Image Synthesis for Protein Localization Prediction
-Emaad Khwaja, Yun Song, Bo Huang
+Emaad Khwaja, Yun S. Song, Bo Huang
+bioRxiv 2022.05.27.493774; doi: https://doi.org/10.1101/2022.05.27.493774
 ```
 
 ## Acknowledgements

@@ -56,7 +56,6 @@ There are two available image encoders in this repository: Discrete VAE (Similar
 The discrete VAE can be trained using the following code:
 
 ```python
-import torch
 from celle import DiscreteVAE
 
 vae = DiscreteVAE(

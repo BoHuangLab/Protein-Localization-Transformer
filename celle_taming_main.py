@@ -137,7 +137,7 @@ class WrappedDataset(Dataset):
 class DataModuleFromConfig(pl.LightningDataModule):
     def __init__(
         self,
-        config_file,
+        data_csv,
         crop_size=256,
         batch_size=1,
         sequence_mode="latent",
@@ -152,7 +152,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         **kwargs,
     ):
         super().__init__()
-        self.config_file = config_file
+        self.data_csv = data_csv
         self.protein_sequence_length = 0
         self.image_folders = []
         self.crop_size = crop_size
@@ -180,7 +180,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
     def setup(self, stage=None):
         # called on every GPU
         self.cell_dataset_train = OpenCellLoader(
-            config_file=self.config_file,
+            data_csv=self.data_csv,
             crop_size=self.crop_size,
             crop_method="random",
             split_key="train",
@@ -191,7 +191,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         )
 
         self.cell_dataset_val = OpenCellLoader(
-            config_file=self.config_file,
+            data_csv=self.data_csv,
             crop_size=self.crop_size,
             split_key="val",
             crop_method="center",

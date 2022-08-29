@@ -143,10 +143,6 @@ model.generate_images(text=sequence,
                       use_cache=True)
 ```
 
-## Pre-trained Models
-
-Pre-trained models will be available after publication.
-
 ## Citation
 
 Please cite us if you decide to use our code for any part of your research.

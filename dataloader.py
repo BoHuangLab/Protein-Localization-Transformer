@@ -261,7 +261,7 @@ class OpenCellLoader(Dataset):
         elif self.sequence_mode == "embedding":
 
             if self.vocab == "esm1b":
-                pad_token = 3
+                pad_token = 1
 
                 protein_vector = self.tokenizer([("", protein_sequence)])[-1][:, 1:]
 

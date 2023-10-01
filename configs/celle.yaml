@@ -12,7 +12,7 @@ model:
     dim: 768
     num_text_tokens: 30
     text_seq_len: 1000
-    depth: 31
+    depth: 32
     heads: 16
     dim_head: 64
     attn_dropout: 0.1
